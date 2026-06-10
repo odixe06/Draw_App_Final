@@ -46,7 +46,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AI\ApiConfig.cs" />
-    <Compile Include="Class1.cs" />
     <Compile Include="Config\EnvLoader.cs" />
     <Compile Include="Config\PostgresConnectionString.cs" />
     <Compile Include="Logging\Logger.cs" />

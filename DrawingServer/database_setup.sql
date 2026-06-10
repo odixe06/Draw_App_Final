@@ -111,6 +111,14 @@ CREATE TABLE IF NOT EXISTS RoomEvents (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS Snapshots (
+    id            SERIAL PRIMARY KEY,
+    room_id       INT REFERENCES Rooms(id) ON DELETE CASCADE,
+    snapshot_data JSONB       NOT NULL,
+    thumbnail     TEXT        DEFAULT '',
+    taken_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_rooms_room_code ON Rooms(room_code);
 CREATE INDEX IF NOT EXISTS idx_rooms_owner_id ON Rooms(owner_id);
 CREATE INDEX IF NOT EXISTS idx_rooms_owner_server_id ON Rooms(owner_server_id);
@@ -124,6 +132,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_results_room_id ON AiResults(room_id);
 CREATE INDEX IF NOT EXISTS idx_pixel_art_room_id ON PixelArtCells(room_id);
 CREATE INDEX IF NOT EXISTS idx_room_events_room_id_id ON RoomEvents(room_id, id);
 CREATE INDEX IF NOT EXISTS idx_room_events_event_type ON RoomEvents(event_type);
+CREATE INDEX IF NOT EXISTS idx_snapshots_room_id ON Snapshots(room_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON Snapshots(taken_at);
 
 SELECT table_name
 FROM information_schema.tables

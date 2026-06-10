@@ -4,6 +4,7 @@
 // Person A subscribe events này trong MainForm/LobbyForm
 // ============================================================
 using System;
+using System.Collections.Generic;
 using SharedLib.Payloads;
 using SharedLib.Logging;
 
@@ -39,7 +40,9 @@ namespace DrawingClient.Network
         public static event Action<SyncBoardPayload> OnSyncBoardReceived;
         public static event Action<UndoPayload> OnUndoReceived;
         public static event Action<RedoPayload> OnRedoReceived;
-        public static event Action<PlaybackResponsePayload> OnPlaybackReceived;
+        public static event Action<SnapshotListPayload> OnSnapshotListReceived;
+        // Board JSON cua mot snapshot (de render thumbnail/preview offscreen): (snapshotId, actions)
+        public static event Action<int, List<DrawAction>> OnSnapshotDataReceived;
 
         // ── INTERACTION (UDP) ───────────────────────────────────
         public static event Action<CursorPayload> OnCursorReceived;
@@ -60,12 +63,8 @@ namespace DrawingClient.Network
 
         // ── ADVANCED FEATURES (Tuần 5-6) ────────────────────────
         public static event Action<StickerPayload> OnStickerReceived;
-        public static event Action<FollowModePayload> OnFollowModeReceived;
         public static event Action<TurnBasedPayload> OnTurnBasedReceived;
-        public static event Action<SpotlightPayload> OnSpotlightReceived;
         public static event Action<StickyNotePayload> OnStickyNoteReceived;
-        public static event Action<StickyNoteReplyPayload> OnStickyNoteReplyReceived;
-        public static event Action<TimelineResponsePayload> OnTimelineResponse;
 
         // ── PIXEL ART / EXPORT ─────────────────────
         public static event Action<PixelArtDrawPayload> OnPixelArtDrawReceived;
@@ -96,6 +95,16 @@ namespace DrawingClient.Network
             }
         }
 
+        private static void SafeInvoke<T1, T2>(Action<T1, T2> handler, T1 a, T2 b, string eventName)
+        {
+            if (handler == null) return;
+            foreach (Action<T1, T2> subscriber in handler.GetInvocationList())
+            {
+                try { subscriber(a, b); }
+                catch (Exception ex) { Logger.Exception($"NetworkEvents.{eventName}", ex); }
+            }
+        }
+
         public static void RaiseLoginResponse(LoginResponse p) => SafeInvoke(OnLoginResponse, p, nameof(OnLoginResponse));
         public static void RaiseRegisterResponse(RegisterResponse p) => SafeInvoke(OnRegisterResponse, p, nameof(OnRegisterResponse));
         public static void RaiseCreateRoomResponse(CreateRoomResponse p) => SafeInvoke(OnCreateRoomResponse, p, nameof(OnCreateRoomResponse));
@@ -112,7 +121,8 @@ namespace DrawingClient.Network
         public static void RaiseSyncBoardReceived(SyncBoardPayload p) => SafeInvoke(OnSyncBoardReceived, p, nameof(OnSyncBoardReceived));
         public static void RaiseUndoReceived(UndoPayload p) => SafeInvoke(OnUndoReceived, p, nameof(OnUndoReceived));
         public static void RaiseRedoReceived(RedoPayload p) => SafeInvoke(OnRedoReceived, p, nameof(OnRedoReceived));
-        public static void RaisePlaybackReceived(PlaybackResponsePayload p) => SafeInvoke(OnPlaybackReceived, p, nameof(OnPlaybackReceived));
+        public static void RaiseSnapshotListReceived(SnapshotListPayload p) => SafeInvoke(OnSnapshotListReceived, p, nameof(OnSnapshotListReceived));
+        public static void RaiseSnapshotDataReceived(int snapshotId, List<DrawAction> actions) => SafeInvoke(OnSnapshotDataReceived, snapshotId, actions, nameof(OnSnapshotDataReceived));
         public static void RaiseCursorReceived(CursorPayload p) => SafeInvoke(OnCursorReceived, p, nameof(OnCursorReceived));
         public static void RaiseReactionReceived(ReactionPayload p) => SafeInvoke(OnReactionReceived, p, nameof(OnReactionReceived));
         public static void RaiseChatReceived(ChatPayload p) => SafeInvoke(OnChatReceived, p, nameof(OnChatReceived));
@@ -123,12 +133,8 @@ namespace DrawingClient.Network
         public static void RaiseAiTextToImageResult(AiTextToImageResultPayload p) => SafeInvoke(OnAiTextToImageResult, p, nameof(OnAiTextToImageResult));
         public static void RaiseAiBgRemovedResult(AiBgRemovedPayload p) => SafeInvoke(OnAiBgRemovedResult, p, nameof(OnAiBgRemovedResult));
         public static void RaiseStickerReceived(StickerPayload p) => SafeInvoke(OnStickerReceived, p, nameof(OnStickerReceived));
-        public static void RaiseFollowModeReceived(FollowModePayload p) => SafeInvoke(OnFollowModeReceived, p, nameof(OnFollowModeReceived));
         public static void RaiseTurnBasedReceived(TurnBasedPayload p) => SafeInvoke(OnTurnBasedReceived, p, nameof(OnTurnBasedReceived));
-        public static void RaiseSpotlightReceived(SpotlightPayload p) => SafeInvoke(OnSpotlightReceived, p, nameof(OnSpotlightReceived));
         public static void RaiseStickyNoteReceived(StickyNotePayload p) => SafeInvoke(OnStickyNoteReceived, p, nameof(OnStickyNoteReceived));
-        public static void RaiseStickyNoteReplyReceived(StickyNoteReplyPayload p) => SafeInvoke(OnStickyNoteReplyReceived, p, nameof(OnStickyNoteReplyReceived));
-        public static void RaiseTimelineResponse(TimelineResponsePayload p) => SafeInvoke(OnTimelineResponse, p, nameof(OnTimelineResponse));
         public static void RaisePixelArtDrawReceived(PixelArtDrawPayload p) => SafeInvoke(OnPixelArtDrawReceived, p, nameof(OnPixelArtDrawReceived));
         public static void RaisePixelArtSyncReceived(PixelArtSyncPayload p) => SafeInvoke(OnPixelArtSyncReceived, p, nameof(OnPixelArtSyncReceived));
         public static void RaiseDisconnected() => SafeInvoke(OnDisconnected, nameof(OnDisconnected));

@@ -58,28 +58,6 @@ namespace SharedLib.Payloads
         public long Timestamp { get; set; }
     }
 
-    /// <summary>Follow Mode — theo dõi vị trí/zoom của người khác realtime.</summary>
-    public class FollowModePayload
-    {
-        public string FollowerUsername { get; set; }
-        public string TargetUsername { get; set; }
-        public bool IsFollowing { get; set; }
-        // Khi leader gửi vị trí viewport:
-        public int ViewX { get; set; }
-        public int ViewY { get; set; }
-        public float ZoomFactor { get; set; }
-    }
-
-    /// <summary>Spotlight Mode — UDP — vùng sáng quanh chuột, phần còn lại tối.</summary>
-    public class SpotlightPayload
-    {
-        public string Username { get; set; }
-        public int X { get; set; }
-        public int Y { get; set; }
-        public bool IsActive { get; set; }
-        public int RadiusPx { get; set; } = 200;
-    }
-
     /// <summary>Sticky Note / Comment — giống Figma comment.</summary>
     public class StickyNotePayload
     {
@@ -91,14 +69,6 @@ namespace SharedLib.Payloads
         public int Height { get; set; }
         public string Text { get; set; }
         public bool IsOpen { get; set; } = true;
-        public long Timestamp { get; set; }
-    }
-
-    public class StickyNoteReplyPayload
-    {
-        public string NoteID { get; set; }
-        public string AuthorUsername { get; set; }
-        public string Text { get; set; }
         public long Timestamp { get; set; }
     }
 

@@ -85,7 +85,6 @@ namespace DrawingClient.Network
         public void SendTurnBased(TurnBasedPayload p) => SendPacket(CommandType.SET_TURNBASED, p);
         public void SendTurnChange(TurnBasedPayload p) => SendPacket(CommandType.TURN_CHANGE, p);
         public void SendCursor(CursorPayload p) => SendPacket(CommandType.CURSOR, p);
-        public void SendReaction(ReactionPayload p) => SendPacket(CommandType.REACTION, p);
 
         public void RegisterEndpoint(string username, string roomCode, string serverId = "")
         {
@@ -159,10 +158,7 @@ namespace DrawingClient.Network
                         NetworkEvents.RaiseCursorReceived(
                             JsonConvert.DeserializeObject<CursorPayload>(json));
                         break;
-                    case CommandType.REACTION:
-                        NetworkEvents.RaiseReactionReceived(
-                            JsonConvert.DeserializeObject<ReactionPayload>(json));
-                        break;
+                    // REACTION da chuyen sang TCP (xem ClientNetwork) — khong xu ly qua UDP nua.
                 }
             }
             catch (Exception ex)

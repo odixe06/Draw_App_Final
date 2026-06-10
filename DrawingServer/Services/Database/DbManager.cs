@@ -70,45 +70,70 @@ namespace DrawingServer.Database // Đảm bảo đúng Namespace này để cá
             }
         }
 
-        /// <summary>Xử lý Đăng nhập / Đăng ký tự động</summary>
+        /// <summary>Xac thuc dang nhap. Khong tu tao tai khoan moi.</summary>
         public static async Task<(bool IsSuccess, string Message)> LoginAsync(string username, string password)
         {
             try
             {
-                // KET NOI DU LIEU/BAT DONG BO: LoginAsync mo connection PostgreSQL va truy van Users bang await.
+                username = (username ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                    return (false, "Ten dang nhap hoac mat khau khong hop le.");
+
                 using var conn = new NpgsqlConnection(connString);
                 await conn.OpenAsync();
 
                 string hashedPass = ComputeSha256Hash(password);
-
-                // Kiểm tra user tồn tại chưa
-                // AUTH FLOW - BUOC 6B.1: truy van password_hash theo username trong bang Users.
                 using var cmd = new NpgsqlCommand("SELECT password_hash FROM Users WHERE username = @u", conn);
                 cmd.Parameters.AddWithValue("u", username);
                 var dbPass = await cmd.ExecuteScalarAsync() as string;
 
-                if (dbPass != null)
-                {
-                    // AUTH FLOW - BUOC 6B.2: user da ton tai, so sanh password nguoi dung gui voi hash trong DB.
-                    if (dbPass == hashedPass || dbPass == password) return (true, "Đăng nhập thành công!");
-                    return (false, "Sai mật khẩu!");
-                }
-                else
-                {
-                    // Nếu chưa có thì tạo mới (Auto-Register)
-                    // AUTH FLOW - BUOC 6A.2: user chua ton tai, tao ban ghi Users moi voi password da hash.
-                    using var cmdInsert = new NpgsqlCommand("INSERT INTO Users (username, password_hash) VALUES (@u, @p)", conn);
-                    cmdInsert.Parameters.AddWithValue("u", username);
-                    cmdInsert.Parameters.AddWithValue("p", hashedPass);
-                    // KET NOI DU LIEU/BAT DONG BO: user moi duoc insert vao Users bang lenh async.
-                    await cmdInsert.ExecuteNonQueryAsync();
-                    return (true, "Tạo tài khoản thành công!");
-                }
+                if (dbPass == null)
+                    return (false, "Tai khoan chua ton tai.");
+
+                if (dbPass == hashedPass || dbPass == password)
+                    return (true, "Dang nhap thanh cong!");
+
+                return (false, "Sai mat khau!");
             }
-            catch (Exception ex) { return (false, "Lỗi kết nối DB: " + ex.Message); }
+            catch (Exception ex) { return (false, "Loi ket noi DB: " + ex.Message); }
         }
 
-        /// <summary>Tạo phòng mới và trả về mã phòng ngẫu nhiên</summary>
+        public static async Task<(bool IsSuccess, string Message)> RegisterAsync(string username, string password)
+        {
+            try
+            {
+                username = (username ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                    return (false, "Ten dang nhap hoac mat khau khong hop le.");
+
+                using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync();
+
+                using var cmdExists = new NpgsqlCommand("SELECT 1 FROM Users WHERE username = @u", conn);
+                cmdExists.Parameters.AddWithValue("u", username);
+                var exists = await cmdExists.ExecuteScalarAsync();
+                if (exists != null)
+                    return (false, "Ten tai khoan da ton tai!");
+
+                string hashedPass = ComputeSha256Hash(password);
+                using var cmdInsert = new NpgsqlCommand("INSERT INTO Users (username, password_hash) VALUES (@u, @p)", conn);
+                cmdInsert.Parameters.AddWithValue("u", username);
+                cmdInsert.Parameters.AddWithValue("p", hashedPass);
+                await cmdInsert.ExecuteNonQueryAsync();
+
+                return (true, "Dang ky thanh cong! Hay dang nhap.");
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                return (false, "Ten tai khoan da ton tai!");
+            }
+            catch (Exception ex)
+            {
+                return (false, "Loi ket noi DB: " + ex.Message);
+            }
+        }
+
+        /// <summary>Tao phong moi va tra ve ma phong ngau nhien.</summary>
         public static async Task<string> CreateRoomAsync(string username, int width, int height)
         {
             try
@@ -834,43 +859,137 @@ namespace DrawingServer.Database // Đảm bảo đúng Namespace này để cá
             }
         }
 
-        // ── TIMELINE ───────────────────────────────────────────────────────────
+        // ── SNAPSHOT (checkpoint dinh ky cua board) ─────────────────────────────
 
-        /// <summary>
-        /// Lấy tất cả stroke_data trong phòng tính đến thời điểm targetTimestamp (Unix ms).
-        /// Dùng cho Time Travel — client kéo thanh timeline về quá khứ.
-        /// </summary>
-        public static async Task<List<string>> GetHistoryUntilAsync(string roomCode, long targetTimestampMs)
+        /// <summary>Tao bang Snapshots neu chua co (self-healing, giong EnsureGalleryTableAsync).</summary>
+        private static async Task EnsureSnapshotsTableAsync(NpgsqlConnection conn)
         {
-            var history = new List<string>();
+            using var cmd = new NpgsqlCommand(
+                @"CREATE TABLE IF NOT EXISTS Snapshots (
+                    id            SERIAL PRIMARY KEY,
+                    room_id       INT REFERENCES Rooms(id) ON DELETE CASCADE,
+                    snapshot_data JSONB       NOT NULL,
+                    thumbnail     TEXT        DEFAULT '',
+                    taken_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_snapshots_room_id  ON Snapshots(room_id);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON Snapshots(taken_at);",
+                conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>Luu mot snapshot (mang JSON cac stroke) cho phong. Tra ve id, hoac 0 neu loi.</summary>
+        public static async Task<int> SaveSnapshotAsync(string roomCode, string snapshotJson, string thumbnailBase64 = "")
+        {
+            try
+            {
+                using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync();
+                await EnsureSnapshotsTableAsync(conn);
+
+                using var cmdRoom = new NpgsqlCommand("SELECT id FROM Rooms WHERE room_code = @c", conn);
+                cmdRoom.Parameters.AddWithValue("c", roomCode);
+                var roomIdObj = await cmdRoom.ExecuteScalarAsync();
+                if (roomIdObj == null || roomIdObj == DBNull.Value) return 0;
+                int roomId = Convert.ToInt32(roomIdObj);
+
+                using var cmd = new NpgsqlCommand(
+                    "INSERT INTO Snapshots (room_id, snapshot_data, thumbnail, taken_at) VALUES (@r, @d::jsonb, @t, NOW()) RETURNING id",
+                    conn);
+                cmd.Parameters.AddWithValue("r", roomId);
+                cmd.Parameters.AddWithValue("d", snapshotJson ?? "[]");
+                cmd.Parameters.AddWithValue("t", thumbnailBase64 ?? "");
+                var idObj = await cmd.ExecuteScalarAsync();
+                return idObj == null ? 0 : Convert.ToInt32(idObj);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("DB", $"SaveSnapshotAsync lỗi: {ex.Message}");
+                return 0;
+            }
+        }
+
+        /// <summary>Liet ke metadata snapshot cua phong (moi nhat truoc), khong kem snapshot_data nang.</summary>
+        public static async Task<List<(int Id, DateTime TakenAt, string Thumbnail)>> GetSnapshotListAsync(string roomCode)
+        {
+            var list = new List<(int, DateTime, string)>();
+            try
+            {
+                using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync();
+                await EnsureSnapshotsTableAsync(conn);
+
+                using var cmd = new NpgsqlCommand(
+                    @"SELECT s.id, s.taken_at, s.thumbnail
+                      FROM Snapshots s JOIN Rooms r ON s.room_id = r.id
+                      WHERE r.room_code = @c
+                      ORDER BY s.taken_at DESC",
+                    conn);
+                cmd.Parameters.AddWithValue("c", roomCode);
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    int id = reader.GetInt32(0);
+                    DateTime takenAt = reader.GetDateTime(1);
+                    string thumb = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                    list.Add((id, takenAt, thumb));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("DB", $"GetSnapshotListAsync lỗi: {ex.Message}");
+            }
+            return list;
+        }
+
+        /// <summary>Lay snapshot_data (mang JSON stroke) cua mot snapshot theo id.</summary>
+        public static async Task<string> GetSnapshotDataAsync(int snapshotId)
+        {
+            try
+            {
+                using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync();
+                await EnsureSnapshotsTableAsync(conn);
+
+                using var cmd = new NpgsqlCommand("SELECT snapshot_data FROM Snapshots WHERE id = @id", conn);
+                cmd.Parameters.AddWithValue("id", snapshotId);
+                var obj = await cmd.ExecuteScalarAsync();
+                return obj == null || obj == DBNull.Value ? "" : obj.ToString();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("DB", $"GetSnapshotDataAsync lỗi: {ex.Message}");
+                return "";
+            }
+        }
+
+        /// <summary>Giu lai keepN snapshot moi nhat cua phong, xoa cac snapshot cu hon (retention).</summary>
+        public static async Task PruneSnapshotsAsync(string roomCode, int keepN)
+        {
+            if (keepN < 1) keepN = 1;
             try
             {
                 using var conn = new NpgsqlConnection(connString);
                 await conn.OpenAsync();
 
-                using var cmdRoom = new NpgsqlCommand("SELECT id FROM Rooms WHERE room_code = @c", conn);
-                cmdRoom.Parameters.AddWithValue("c", roomCode);
-                var roomId = await cmdRoom.ExecuteScalarAsync() as int?;
-                if (roomId == null) return history;
-
                 using var cmd = new NpgsqlCommand(
-                    @"SELECT stroke_data FROM DrawHistory
-                      WHERE room_id = @r
-                        AND created_at <= to_timestamp(@ts / 1000.0)
-                      ORDER BY id ASC",
+                    @"DELETE FROM Snapshots
+                      WHERE room_id = (SELECT id FROM Rooms WHERE room_code = @c)
+                        AND id NOT IN (
+                            SELECT s.id FROM Snapshots s JOIN Rooms r ON s.room_id = r.id
+                            WHERE r.room_code = @c
+                            ORDER BY s.taken_at DESC
+                            LIMIT @keep)",
                     conn);
-                cmd.Parameters.AddWithValue("r",  roomId);
-                cmd.Parameters.AddWithValue("ts", targetTimestampMs);
-
-                using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                    history.Add(reader.GetString(0));
+                cmd.Parameters.AddWithValue("c", roomCode);
+                cmd.Parameters.AddWithValue("keep", keepN);
+                await cmd.ExecuteNonQueryAsync();
             }
             catch (Exception ex)
             {
-                Logger.Warning("DB", $"GetHistoryUntilAsync lỗi: {ex.Message}");
+                Logger.Warning("DB", $"PruneSnapshotsAsync lỗi: {ex.Message}");
             }
-            return history;
         }
+
     }
 }

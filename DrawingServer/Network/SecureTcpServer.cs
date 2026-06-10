@@ -105,7 +105,7 @@ namespace DrawingServer.Network
                                 await SendPacketToClientAsync(session, PacketHelper.Create(CommandType.LOGIN_RESPONSE,
                                     new LoginResponse { IsSuccess = dbResult.IsSuccess, Message = dbResult.Message }));
                                 // AUTH FLOW - BUOC 8B: neu hop le, gan username vao ClientSession de cac lenh room/chat/draw biet chu so huu.
-                                if (dbResult.IsSuccess) session.Username = loginData.Username;
+                                if (dbResult.IsSuccess) session.Username = (loginData.Username ?? "").Trim();
                             }
                             break;
 
@@ -114,28 +114,10 @@ namespace DrawingServer.Network
                             var regData = PacketHelper.GetPayload<RegisterPayload>(packet);
                             if (regData != null)
                             {
-                                // Kiểm tra username đã tồn tại chưa
-                                // AUTH FLOW - BUOC 6A: dung LoginAsync de kiem tra user da ton tai chua.
-                                // Neu user ton tai nhung password khac, LoginAsync tra "Sai mat khau" -> xem nhu username da bi dung.
-                                var existCheck = await DbManager.LoginAsync(regData.Username, regData.Password);
-                                bool alreadyExists = existCheck.Message == "Sai mật khẩu!";
-
-                                if (alreadyExists)
-                                {
-                                    // AUTH FLOW - BUOC 7A: username da ton tai, tra REGISTER_RESPONSE that bai.
-                                    await SendPacketToClientAsync(session, PacketHelper.Create(CommandType.REGISTER_RESPONSE,
-                                        new RegisterResponse { IsSuccess = false, Message = "Tên tài khoản đã tồn tại!" }));
-                                }
-                                else
-                                {
-                                    // LoginAsync tự tạo nếu chưa có → reuse
-                                    // AUTH FLOW - BUOC 6A.1: LoginAsync tu tao user neu username chua co trong DB.
-                                    var regResult = await DbManager.LoginAsync(regData.Username, regData.Password);
-                                    // AUTH FLOW - BUOC 7A: gui ket qua dang ky ve client.
-                                    await SendPacketToClientAsync(session, PacketHelper.Create(CommandType.REGISTER_RESPONSE,
-                                        new RegisterResponse { IsSuccess = regResult.IsSuccess, Message = regResult.IsSuccess ? "Đăng ký thành công! Hãy đăng nhập." : regResult.Message }));
-                                }
-                                Logger.Info("TCP", $"[REGISTER] '{regData.Username}' → {(alreadyExists ? "đã tồn tại" : "thành công")}");
+                                var regResult = await DbManager.RegisterAsync(regData.Username, regData.Password);
+                                await SendPacketToClientAsync(session, PacketHelper.Create(CommandType.REGISTER_RESPONSE,
+                                    new RegisterResponse { IsSuccess = regResult.IsSuccess, Message = regResult.Message }));
+                                Logger.Info("TCP", $"[REGISTER] '{(regData.Username ?? "").Trim()}' -> {(regResult.IsSuccess ? "success" : "failed")}: {regResult.Message}");
                             }
                             break;
 
@@ -312,6 +294,17 @@ namespace DrawingServer.Network
                             }
                             break;
 
+                        // Emoji reaction (ephemeral) — broadcast den ca phong, khong luu DB.
+                        case CommandType.REACTION:
+                            if (!string.IsNullOrEmpty(session.RoomCode))
+                            {
+                                var reactionData = PacketHelper.GetPayload<ReactionPayload>(packet) ?? new ReactionPayload();
+                                reactionData.Username = session.Username ?? "unknown";
+                                packet = PacketHelper.Create(CommandType.REACTION, reactionData);
+                                await BroadcastToRoomAsync(session.RoomCode, packet, excludeClientId: clientId);
+                            }
+                            break;
+
                         // Drawing commands are broadcast first, then saved in the background.
                         case CommandType.DRAW:
                         case CommandType.FLOOD_FILL:
@@ -388,7 +381,6 @@ namespace DrawingServer.Network
 
                         case CommandType.UNDO:
                         case CommandType.REDO:
-                        case CommandType.FOLLOW_MODE:
                         case CommandType.SET_TURNBASED:
                         case CommandType.TURN_CHANGE:
                             if (!string.IsNullOrEmpty(session.RoomCode))
@@ -721,30 +713,57 @@ namespace DrawingServer.Network
                             }
                             break;
 
-                        case CommandType.TIMELINE_REQUEST:
-                            // Client kéo thanh timeline → xin strokes đến thời điểm TargetTimestamp
-                            var timelineReq = PacketHelper.GetPayload<SharedLib.Payloads.TimelineRequestPayload>(packet);
-                            if (timelineReq != null && !string.IsNullOrEmpty(session.RoomCode))
+                        case CommandType.SNAPSHOT_LIST:
+                            // Client mo panel "Xem lai" -> liet ke cac snapshot (checkpoint) cua phong
+                            if (!string.IsNullOrEmpty(session.RoomCode))
                             {
-                                var historyUntil = await DbManager.GetHistoryUntilAsync(
-                                    session.RoomCode, timelineReq.TargetTimestamp);
-
-                                string histJson = "[" + string.Join(",", historyUntil) + "]";
-                                var tlResp = new SharedLib.Payloads.TimelineResponsePayload
+                                var snaps = await DbManager.GetSnapshotListAsync(session.RoomCode);
+                                var listPayload = new SharedLib.Payloads.SnapshotListPayload { RoomCode = session.RoomCode };
+                                foreach (var s in snaps)
                                 {
-                                    RoomCode        = session.RoomCode,
-                                    TargetTimestamp = timelineReq.TargetTimestamp,
-                                    Actions         = new System.Collections.Generic.List<SharedLib.Payloads.DrawAction>()
-                                };
-                                // Gửi raw JSON qua SYNC_BOARD để client replay đến đúng mốc thời gian
+                                    listPayload.Snapshots.Add(new SharedLib.Payloads.SnapshotInfo
+                                    {
+                                        SnapshotID = s.Id,
+                                        Timestamp = new DateTimeOffset(s.TakenAt.ToUniversalTime()).ToUnixTimeMilliseconds(),
+                                        ThumbnailBase64 = s.Thumbnail ?? ""
+                                    });
+                                }
                                 await SendPacketToClientAsync(session,
-                                    PacketHelper.Create(CommandType.TIMELINE_RESPONSE, tlResp));
-                                // Đồng thời gửi data thực qua SYNC_BOARD
-                                if (historyUntil.Count > 0)
+                                    PacketHelper.Create(CommandType.SNAPSHOT_LIST, listPayload));
+                                Logger.Info("TCP", $"[SNAPSHOT] Gui {listPayload.Snapshots.Count} snapshot cho '{session.Username}' phong {session.RoomCode}");
+                            }
+                            break;
+
+                        case CommandType.SNAPSHOT_RESTORE:
+                            // Client chon mot snapshot -> xem lai trang thai cu (view-only, chi gui cho client nay)
+                            var restoreReq = PacketHelper.GetPayload<SharedLib.Payloads.SnapshotRestorePayload>(packet);
+                            if (restoreReq != null && !string.IsNullOrEmpty(session.RoomCode))
+                            {
+                                string snapJson = await DbManager.GetSnapshotDataAsync(restoreReq.SnapshotID);
+                                if (!string.IsNullOrWhiteSpace(snapJson))
+                                {
+                                    // Tai su dung SYNC_BOARD: client se render trang thai snapshot trong che do xem lai
                                     await SendPacketToClientAsync(session,
-                                        new Packet { Cmd = CommandType.SYNC_BOARD,
-                                                     Payload = Encoding.UTF8.GetBytes(histJson) });
-                                Logger.Info("TCP", $"[TIMELINE] Gửi {historyUntil.Count} stroke đến timestamp {timelineReq.TargetTimestamp} cho '{session.Username}'");
+                                        new Packet { Cmd = CommandType.SYNC_BOARD, Payload = Encoding.UTF8.GetBytes(snapJson) });
+                                    Logger.Info("TCP", $"[SNAPSHOT] Restore snapshot {restoreReq.SnapshotID} (view-only) cho '{session.Username}'");
+                                }
+                            }
+                            break;
+
+                        case CommandType.SNAPSHOT_DATA:
+                            // Client xin board JSON cua mot snapshot de render thumbnail/preview offscreen
+                            // (KHONG dung SYNC_BOARD nen khong dung canvas chinh cua client).
+                            var dataReq = PacketHelper.GetPayload<SharedLib.Payloads.SnapshotDataPayload>(packet);
+                            if (dataReq != null && !string.IsNullOrEmpty(session.RoomCode))
+                            {
+                                string boardJson = await DbManager.GetSnapshotDataAsync(dataReq.SnapshotID);
+                                await SendPacketToClientAsync(session, PacketHelper.Create(CommandType.SNAPSHOT_DATA,
+                                    new SharedLib.Payloads.SnapshotDataPayload
+                                    {
+                                        RoomCode = session.RoomCode,
+                                        SnapshotID = dataReq.SnapshotID,
+                                        BoardJson = boardJson ?? ""
+                                    }));
                             }
                             break;
 

@@ -490,4 +490,6 @@ $RECYCLE.BIN/
 *.swp
 
 # May cua Triet
-
+docs/
+CLAUDE.md
+CONTEXT.md

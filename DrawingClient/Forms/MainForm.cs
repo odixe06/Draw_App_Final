@@ -129,6 +129,9 @@ namespace DrawingClient.Forms
                 ToastForm.ShowToast(this, "Đã hút màu");
             };
 
+            // Cong cu AiRegion: chon xong vung -> nhan dien + ve lai thanh line art (object anh AI).
+            canvasManager.OnAiRegionSelected = async (region) => await RunAiRegionAsync(region);
+
             canvasManager.OnNetworkDrawAction = payload =>
             {
                 if (payload == null)
@@ -216,7 +219,8 @@ namespace DrawingClient.Forms
             NetworkEvents.OnActivityLogReceived += NetworkEvents_OnActivityLogReceived;
             NetworkEvents.OnUndoReceived += NetworkEvents_OnUndoReceived;
             NetworkEvents.OnRedoReceived += NetworkEvents_OnRedoReceived;
-            NetworkEvents.OnPlaybackReceived += NetworkEvents_OnPlaybackReceived;
+            NetworkEvents.OnSnapshotListReceived += NetworkEvents_OnSnapshotListReceived;
+            NetworkEvents.OnSnapshotDataReceived += NetworkEvents_OnSnapshotDataReceived;
             NetworkEvents.OnStickerReceived += NetworkEvents_OnStickerReceived;
             NetworkEvents.OnStickyNoteReceived += NetworkEvents_OnStickyNoteReceived;
             NetworkEvents.OnTurnBasedReceived += NetworkEvents_OnTurnBasedReceived;
@@ -242,7 +246,8 @@ namespace DrawingClient.Forms
             NetworkEvents.OnActivityLogReceived -= NetworkEvents_OnActivityLogReceived;
             NetworkEvents.OnUndoReceived -= NetworkEvents_OnUndoReceived;
             NetworkEvents.OnRedoReceived -= NetworkEvents_OnRedoReceived;
-            NetworkEvents.OnPlaybackReceived -= NetworkEvents_OnPlaybackReceived;
+            NetworkEvents.OnSnapshotListReceived -= NetworkEvents_OnSnapshotListReceived;
+            NetworkEvents.OnSnapshotDataReceived -= NetworkEvents_OnSnapshotDataReceived;
             NetworkEvents.OnStickerReceived -= NetworkEvents_OnStickerReceived;
             NetworkEvents.OnStickyNoteReceived -= NetworkEvents_OnStickyNoteReceived;
             NetworkEvents.OnTurnBasedReceived -= NetworkEvents_OnTurnBasedReceived;
@@ -372,6 +377,7 @@ namespace DrawingClient.Forms
             remoteCursorRenderTimer.Tick += (s, e) => FlushRemoteCursorState();
             remoteCursorRenderTimer.Start();
             cursorLayer = new CursorLayer(canvas);
+
             this.Shown += (s, e) => canvasManager?.FitToViewport();
             UpdateToolSelectionVisuals(selectedToolType);
         }
@@ -593,6 +599,7 @@ namespace DrawingClient.Forms
 
             row1Left.Controls.Add(CreateToolbarLabel("Vẽ"));
             AddWrapControl(row1Left, toolButtons[ToolType.Pen]);
+            AddWrapControl(row1Left, toolButtons[ToolType.SmartPen]);
             AddWrapControl(row1Left, toolButtons[ToolType.Mouse]);
             AddWrapControl(row1Left, toolButtons[ToolType.Line]);
             AddWrapControl(row1Left, toolButtons[ToolType.Rectangle]);
@@ -630,6 +637,7 @@ namespace DrawingClient.Forms
             row3Left.Controls.Add(CreateToolbarLabel("AI"));
             AddWrapControl(row3Left, btnAiTextToDrawing);
             AddWrapControl(row3Left, btnAiRemoveBg);
+            AddWrapControl(row3Left, toolButtons[ToolType.AiRegion]);
             row3Left.Controls.Add(CreateToolbarLabel("Sticker"));
             AddWrapControl(row3Left, btnStickerLibrary);
             AddWrapControl(row3Left, btnStickerMode);
@@ -924,6 +932,8 @@ namespace DrawingClient.Forms
             selectedToolType = toolType;
             if (canvasManager != null)
                 canvasManager.CurrentTool = toolType;
+            if (canvas != null)
+                canvas.Cursor = (toolType == ToolType.SmartPen || toolType == ToolType.AiRegion) ? Cursors.Cross : Cursors.Default;
             UpdateToolSelectionVisuals(toolType);
         }
 
@@ -960,6 +970,10 @@ namespace DrawingClient.Forms
                     return "A";
                 case ToolType.Pipette:
                     return "🧪";
+                case ToolType.SmartPen:
+                    return "✨";
+                case ToolType.AiRegion:
+                    return "🪄";
                 default:
                     return toolType.ToString();
             }
@@ -987,6 +1001,10 @@ namespace DrawingClient.Forms
                     return "Chèn chữ";
                 case ToolType.Pipette:
                     return "Hút màu";
+                case ToolType.SmartPen:
+                    return "Bút thông minh: vẽ tay → tự làm mượt & nắn nét (tẩy được như nét thường)";
+                case ToolType.AiRegion:
+                    return "AI: kéo-thả chọn vùng → vẽ lại thành line art (ảnh AI)";
                 default:
                     return toolType.ToString();
             }
@@ -1020,6 +1038,7 @@ namespace DrawingClient.Forms
 
             // FIX LỖI: Dùng hàm Send tổng quát
             playbackPanel.RequestPlayback += () => _network?.Send(CommandType.REQUEST_PLAYBACK, new PlaybackRequestPayload { RoomCode = _roomCode });
+            playbackPanel.RequestSnapshots += () => _network?.RequestSnapshotList();
 
             TabControl tabs = new TabControl { Dock = DockStyle.Fill };
             TabPage tabMembers = new TabPage("Members");
@@ -1057,7 +1076,36 @@ namespace DrawingClient.Forms
 
             chatBottom.Controls.Add(txtChatInput);
             chatBottom.Controls.Add(btnSendChat);
+
+            // Thanh tha cam xuc (emoji reaction) hien thi ngay tren khung chat.
+            FlowLayoutPanel emojiBar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 34,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Padding = new Padding(2),
+                BackColor = Color.WhiteSmoke
+            };
+            foreach (string emo in new[] { "👍", "❤️", "😂", "😮", "🎉", "👏" })
+            {
+                string captured = emo;
+                var btnEmoji = new Button
+                {
+                    Text = emo,
+                    Width = 40,
+                    Height = 28,
+                    Font = new Font("Segoe UI Emoji", 11F),
+                    Margin = new Padding(2, 2, 0, 0),
+                    FlatStyle = FlatStyle.Standard,
+                    TabStop = false
+                };
+                btnEmoji.Click += (s, e) => SendReactionFromPicker(captured);
+                emojiBar.Controls.Add(btnEmoji);
+            }
+
             tabChat.Controls.Add(chatBottom);
+            tabChat.Controls.Add(emojiBar);
             tabChat.Controls.Add(rtbChat);
 
             lstLogs = new ListBox { Dock = DockStyle.Fill };
@@ -1423,7 +1471,7 @@ namespace DrawingClient.Forms
             // XU LY BAT DONG BO: chay request AI bang async de UI khong bi khoa trong luc cho HTTP API.
             await RunButtonTaskAsync(sender as Button, "AI đang tạo ảnh...", async () =>
             {
-                byte[] imageBytes = await StabilityAiClient.GenerateImageAsync(prompt.Trim());
+                byte[] imageBytes = await HuggingFaceClient.GenerateImageAsync(prompt.Trim());
                 if (imageBytes == null || imageBytes.Length == 0)
                     throw new InvalidOperationException("Hugging Face khong tra ve anh.");
 
@@ -1530,7 +1578,7 @@ namespace DrawingClient.Forms
             }
         }
 
-        private string ShowPromptDialog(string title, string labelText)
+        private string ShowPromptDialog(string title, string labelText, string defaultText = "")
         {
             using (Form dialog = new Form())
             using (Label label = new Label())
@@ -1552,6 +1600,8 @@ namespace DrawingClient.Forms
                 textBox.Location = new Point(12, 40);
                 textBox.Size = new Size(396, 24);
                 textBox.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+                textBox.Text = defaultText ?? string.Empty;
+                textBox.SelectionStart = textBox.Text.Length;
 
                 okButton.Text = "Tạo ảnh";
                 okButton.DialogResult = DialogResult.OK;
@@ -2134,6 +2184,7 @@ namespace DrawingClient.Forms
 
         private void NetworkEvents_OnDrawReceived(DrawPayload payload) => UIInvoke(() =>
         {
+            if (isViewingSnapshot) return; // dang xem lai snapshot (view-only) -> bo qua cap nhat live
             RecordAction(ToDrawAction(payload), false);
             canvasManager.ApplyRemoteDraw(payload);
         });
@@ -2247,17 +2298,19 @@ namespace DrawingClient.Forms
         }
         private void NetworkEvents_OnFloodFillReceived(FloodFillPayload payload) => UIInvoke(() =>
         {
+            if (isViewingSnapshot) return;
             RecordAction(ToDrawAction(payload), false);
             canvasManager.ApplyRemoteFloodFill(payload);
         });
         private void NetworkEvents_OnImportImageReceived(ImportImagePayload payload) => UIInvoke(() =>
         {
+            if (isViewingSnapshot) return;
             RecordAction(ToDrawAction(payload), false);
             canvasManager.ApplyRemoteImportImage(payload);
         });
         private void NetworkEvents_OnAiTextToImageResult(AiTextToImageResultPayload payload)
         {
-            if (payload == null)
+            if (payload == null || isViewingSnapshot)
                 return;
 
             UIInvoke(() =>
@@ -2281,7 +2334,7 @@ namespace DrawingClient.Forms
 
         private void NetworkEvents_OnAiBgRemovedResult(AiBgRemovedPayload payload)
         {
-            if (payload == null)
+            if (payload == null || isViewingSnapshot)
                 return;
 
             UIInvoke(() =>
@@ -2305,24 +2358,136 @@ namespace DrawingClient.Forms
 
         private void NetworkEvents_OnSetBackgroundReceived(SetBackgroundPayload payload) => UIInvoke(() =>
         {
+            if (isViewingSnapshot) return;
             RecordAction(ToDrawAction(payload), false);
             canvasManager.ApplyRemoteSetBackground(payload);
         });
         private void NetworkEvents_OnClearAllReceived() => UIInvoke(() =>
         {
+            if (isViewingSnapshot) return;
             actionHistory.Clear();
             undoneActionIds.Clear();
             ownRedoActionIds.Clear();
             canvasManager.ApplyRemoteClearAll();
         });
-        private void NetworkEvents_OnUndoReceived(UndoPayload payload) => UIInvoke(() => ApplyUndoFromNetwork(payload));
-        private void NetworkEvents_OnRedoReceived(RedoPayload payload) => UIInvoke(() => ApplyRedoFromNetwork(payload));
+        private void NetworkEvents_OnUndoReceived(UndoPayload payload) => UIInvoke(() => { if (!isViewingSnapshot) ApplyUndoFromNetwork(payload); });
+        private void NetworkEvents_OnRedoReceived(RedoPayload payload) => UIInvoke(() => { if (!isViewingSnapshot) ApplyRedoFromNetwork(payload); });
 
         private void NetworkEvents_OnReactionReceived(ReactionPayload payload)
         {
-            if (payload == null)
+            if (payload == null || string.IsNullOrWhiteSpace(payload.Emoji))
                 return;
-            UIInvoke(() => cursorLayer.AddEmoji(payload.Emoji, new Point(payload.X, payload.Y)));
+            UIInvoke(() => cursorLayer?.AddEmoji(payload.Emoji, new Point(payload.X, payload.Y)));
+        }
+
+        // Tha emoji: render local ngay + gui qua TCP (tin cay o moi che do: direct/LAN/relay/ngrok).
+        // Toa do gui di la toa do CANVAS (world) de moi client thay dung vi tri du zoom/pan khac nhau.
+        private void EmitReaction(string emoji, Point clientPoint)
+        {
+            if (string.IsNullOrWhiteSpace(_network?.CurrentUsername))
+                return;
+            Point canvasPoint = canvasManager?.ScreenToCanvas(clientPoint) ?? clientPoint;
+            cursorLayer?.AddEmoji(emoji, canvasPoint);
+            _network?.SendReaction(new ReactionPayload
+            {
+                Username = _network.CurrentUsername,
+                Emoji = emoji,
+                X = canvasPoint.X,
+                Y = canvasPoint.Y
+            });
+        }
+
+        private void SendReactionFromPicker(string emoji)
+        {
+            // Tha o giua-duoi vung canvas dang nhin, emoji se bay len roi mo dan.
+            Point pos = new Point(Math.Max(20, canvas.ClientSize.Width / 2),
+                                  Math.Max(40, canvas.ClientSize.Height * 3 / 4));
+            EmitReaction(emoji, pos);
+        }
+
+        // ── NHAN DIEN NET VE TAY -> line art: cong cu AiRegion keo-tha chon vung -> tagger nhan dien -> ve lai dep hon ──
+
+        private async Task RunAiRegionAsync(Rectangle region)
+        {
+            if (!EnsureCanDraw()) return;
+            if (canvasManager == null) return;
+
+            if (!ApiConfig.IsSketchToImageConfigured())
+            {
+                MessageBox.Show(
+                    "Chưa cấu hình HF_SKETCH_SPACE trong .env (URL Hugging Face Space chạy ControlNet-lineart).",
+                    "Thiếu cấu hình AI");
+                return;
+            }
+
+            if (region.Width < 8 || region.Height < 8)
+            {
+                ToastForm.ShowToast(this, "Vùng chọn quá nhỏ");
+                return;
+            }
+
+            // Chup vung da chon (noi rong nhe de khong cat sat net).
+            Bitmap sketchBmp = canvasManager.RenderRegionToBitmap(Rectangle.Inflate(region, 8, 8));
+            if (sketchBmp == null)
+                return;
+
+            byte[] sketchPng;
+            using (var ms = new MemoryStream())
+            {
+                sketchBmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                sketchPng = ms.ToArray();
+            }
+            sketchBmp.Dispose();
+
+            // 1) Tagger "nhan dien" noi dung vung ve (tuy chon: loi -> chuoi rong).
+            string suggested = "";
+            Cursor = Cursors.WaitCursor;
+            try { suggested = await SketchToImageClient.AnalyzeSketchAsync(sketchPng); }
+            catch { /* tagger tuy chon, bo qua */ }
+            finally { Cursor = Cursors.Default; }
+
+            // 2) Cho nguoi dung xac nhan/sua mo ta truoc khi tao.
+            string prompt = ShowPromptDialog("Vẽ lại vùng chọn thành line art",
+                "AI nhận diện (sửa/bổ sung nếu cần, để trống cũng được):", suggested ?? "");
+            if (prompt == null) return; // huy
+            prompt = prompt.Trim();
+
+            // 3) Goi model ve lai (fidelity thap -> AI ve lai cho dep thay vi chi trace net tho).
+            Rectangle target = region;
+            await RunButtonTaskAsync(null, "AI đang vẽ lại thành line art...", async () =>
+            {
+                byte[] resultBytes = await SketchToImageClient.GenerateFromSketchAsync(sketchPng, prompt);
+                if (resultBytes == null || resultBytes.Length == 0)
+                    throw new InvalidOperationException("Space không trả về ảnh line art.");
+
+                using (Image aiImage = CreateImageFromBytes(resultBytes))
+                {
+                    Rectangle place = NormalizeSketchTarget(target, aiImage.Size);
+                    ImportImageAndBroadcast(aiImage, place, "text_to_image", prompt);
+                }
+
+                ToastForm.ShowToast(this, "Đã vẽ lại vùng chọn thành line art");
+            });
+        }
+
+        private Rectangle NormalizeSketchTarget(Rectangle sketch, Size imageSize)
+        {
+            Size canvasSize = canvasManager.CanvasSize;
+            int srcW = imageSize.Width > 0 ? imageSize.Width : Math.Max(1, sketch.Width);
+            int srcH = imageSize.Height > 0 ? imageSize.Height : Math.Max(1, sketch.Height);
+            float ar = srcW / (float)srcH;
+            if (ar <= 0) ar = 1f;
+
+            // Bat dau tu chieu rong vung sketch (toi thieu 96), giu ti le anh; thu nho deu de vua canvas.
+            int w = Math.Max(96, sketch.Width);
+            int h = Math.Max(1, (int)Math.Round(w / ar));
+            if (canvasSize.Width > 0 && w > canvasSize.Width) { w = canvasSize.Width; h = (int)Math.Round(w / ar); }
+            if (canvasSize.Height > 0 && h > canvasSize.Height) { h = canvasSize.Height; w = (int)Math.Round(h * ar); }
+
+            int x = sketch.X, y = sketch.Y;
+            if (canvasSize.Width > 0) x = Math.Max(0, Math.Min(x, canvasSize.Width - w));
+            if (canvasSize.Height > 0) y = Math.Max(0, Math.Min(y, canvasSize.Height - h));
+            return new Rectangle(x, y, Math.Max(48, w), Math.Max(48, h));
         }
 
         private void NetworkEvents_OnChatReceived(ChatPayload payload)
@@ -2346,22 +2511,280 @@ namespace DrawingClient.Forms
             UIInvoke(() => AppendLog($"{payload.Username}: {payload.Action}"));
         }
 
-        private void NetworkEvents_OnPlaybackReceived(PlaybackResponsePayload payload)
+        private void NetworkEvents_OnSnapshotListReceived(SnapshotListPayload payload)
         {
-            if (payload?.Actions == null)
+            if (payload?.Snapshots == null)
                 return;
+            UIInvoke(() => ShowSnapshotListUI(payload.Snapshots));
+        }
+
+        // ── SNAPSHOT / XEM LAI (view-only time-travel) ─────────────────────────
+        private Form snapshotListForm;
+        private ListView snapshotListView;
+        private ImageList snapshotImageList;
+        private PictureBox snapshotPreview;
+        private Label snapshotPreviewLabel;
+        private List<SnapshotInfo> lastSnapshots = new List<SnapshotInfo>();
+        private bool isViewingSnapshot;
+
+        // Render snapshot offscreen -> thumbnail/preview (KHONG dung canvas chinh).
+        private PictureBox offscreenCanvasHost;
+        private CanvasManager offscreenCanvas;
+        private readonly Dictionary<int, Bitmap> snapshotPreviewCache = new Dictionary<int, Bitmap>();
+        private readonly Queue<int> snapshotFetchQueue = new Queue<int>();
+        private bool snapshotFetchInFlight;
+
+        private void ShowSnapshotListUI(List<SnapshotInfo> snapshots)
+        {
+            lastSnapshots = snapshots ?? new List<SnapshotInfo>();
+
+            if (snapshotListForm == null || snapshotListForm.IsDisposed)
+            {
+                snapshotListForm = new Form
+                {
+                    Text = "Xem lại trạng thái phòng (chỉ xem)",
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.Sizable,
+                    ClientSize = new Size(840, 520),
+                    MinimumSize = new Size(620, 380),
+                    MinimizeBox = false,
+                    MaximizeBox = true
+                };
+
+                snapshotImageList = new ImageList { ImageSize = new Size(160, 90), ColorDepth = ColorDepth.Depth32Bit };
+                snapshotListView = new ListView
+                {
+                    Dock = DockStyle.Left,
+                    Width = 200,
+                    View = View.LargeIcon,
+                    LargeImageList = snapshotImageList,
+                    MultiSelect = false,
+                    HideSelection = false
+                };
+                snapshotListView.SelectedIndexChanged += (s, e) => ShowSelectedSnapshotPreview();
+                snapshotListView.DoubleClick += (s, e) => ViewSelectedSnapshot();
+
+                var previewPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.Gainsboro, Padding = new Padding(6) };
+                snapshotPreviewLabel = new Label { Dock = DockStyle.Top, Height = 22, TextAlign = ContentAlignment.MiddleLeft };
+                snapshotPreview = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.White };
+                previewPanel.Controls.Add(snapshotPreview);
+                previewPanel.Controls.Add(snapshotPreviewLabel);
+
+                var pnl = new Panel { Dock = DockStyle.Bottom, Height = 40 };
+                var btnView = new Button { Text = "Xem trên canvas chính", Width = 160, Height = 28, Location = new Point(8, 6) };
+                var btnLive = new Button { Text = "Về hiện tại", Width = 110, Height = 28, Location = new Point(176, 6) };
+                btnView.Click += (s, e) => ViewSelectedSnapshot();
+                btnLive.Click += (s, e) => ReturnToLiveBoard();
+                pnl.Controls.Add(btnView);
+                pnl.Controls.Add(btnLive);
+
+                // Them theo thu tu Fill -> Left -> Bottom de docking chia vung dung.
+                snapshotListForm.Controls.Add(previewPanel);
+                snapshotListForm.Controls.Add(snapshotListView);
+                snapshotListForm.Controls.Add(pnl);
+                snapshotListForm.FormClosing += (s, e) =>
+                {
+                    e.Cancel = true;
+                    snapshotListForm.Hide();
+                    if (isViewingSnapshot) ReturnToLiveBoard();
+                };
+            }
+
+            snapshotFetchQueue.Clear();
+            snapshotFetchInFlight = false;
+            snapshotListView.Items.Clear();
+            foreach (var snap in lastSnapshots)
+            {
+                DateTime local = DateTimeOffset.FromUnixTimeMilliseconds(snap.Timestamp).LocalDateTime;
+                var item = new ListViewItem($"#{snap.SnapshotID}  {local:HH:mm:ss dd/MM}") { Tag = snap };
+                if (snapshotImageList.Images.ContainsKey(snap.SnapshotID.ToString()))
+                    item.ImageKey = snap.SnapshotID.ToString();
+                snapshotListView.Items.Add(item);
+                snapshotFetchQueue.Enqueue(snap.SnapshotID); // tai du lieu de render thumbnail
+            }
+
+            snapshotPreview.Image = null;
+            snapshotPreviewLabel.Text = lastSnapshots.Count > 0
+                ? "Chọn một snapshot để xem trạng thái canvas lúc đó."
+                : "(Chưa có snapshot nào)";
+            if (snapshotListView.Items.Count > 0)
+                snapshotListView.Items[0].Selected = true;
+
+            if (!snapshotListForm.Visible)
+                snapshotListForm.Show(this);
+            snapshotListForm.BringToFront();
+
+            PumpSnapshotFetch();
+        }
+
+        // Gui lan luot tung yeu cau SNAPSHOT_DATA (1 cai dang bay) de khong nghen server.
+        private void PumpSnapshotFetch()
+        {
+            if (snapshotFetchInFlight) return;
+            while (snapshotFetchQueue.Count > 0)
+            {
+                int id = snapshotFetchQueue.Dequeue();
+                if (snapshotPreviewCache.ContainsKey(id))
+                {
+                    UpdateSnapshotThumbnail(id, snapshotPreviewCache[id]);
+                    continue;
+                }
+                snapshotFetchInFlight = true;
+                _network?.RequestSnapshotData(id);
+                return;
+            }
+        }
+
+        private void NetworkEvents_OnSnapshotDataReceived(int snapshotId, List<DrawAction> actions)
+        {
             UIInvoke(() =>
             {
-                canvasManager.ClearAll();
-                foreach (var action in payload.Actions)
-                    canvasManager.ApplyDrawAction(action);
-                AppendLog($"Playback: {payload.Actions.Count} hành động");
+                try
+                {
+                    if (!snapshotPreviewCache.ContainsKey(snapshotId))
+                    {
+                        Bitmap preview = RenderActionsToBitmap(actions);
+                        if (preview != null)
+                        {
+                            snapshotPreviewCache[snapshotId] = preview;
+                            UpdateSnapshotThumbnail(snapshotId, preview);
+                        }
+                    }
+
+                    var sel = GetSelectedSnapshot();
+                    if (sel != null && sel.SnapshotID == snapshotId)
+                        ShowSelectedSnapshotPreview();
+                }
+                catch { /* render loi 1 snapshot khong duoc lam ket dialog */ }
+                finally
+                {
+                    snapshotFetchInFlight = false;
+                    PumpSnapshotFetch();
+                }
             });
+        }
+
+        // Render mang DrawAction ra bitmap bang mot CanvasManager an (offscreen), khong dung canvas chinh.
+        private Bitmap RenderActionsToBitmap(List<DrawAction> actions)
+        {
+            if (offscreenCanvas == null)
+            {
+                offscreenCanvasHost = new PictureBox
+                {
+                    Width = CanvasManager.DefaultCanvasSize.Width,
+                    Height = CanvasManager.DefaultCanvasSize.Height,
+                    Visible = false
+                };
+                offscreenCanvas = new CanvasManager(offscreenCanvasHost);
+            }
+
+            offscreenCanvas.RenderActionHistory(actions ?? new List<DrawAction>());
+            Size sz = offscreenCanvas.CanvasSize;
+            if (sz.Width <= 0 || sz.Height <= 0)
+                return null;
+            using (Bitmap full = offscreenCanvas.RenderRegionToBitmap(new Rectangle(0, 0, sz.Width, sz.Height)))
+            {
+                if (full == null) return null;
+                return ScaleToFit(full, 960, 540); // cache kich thuoc vua phai cho preview
+            }
+        }
+
+        private void UpdateSnapshotThumbnail(int snapshotId, Bitmap preview)
+        {
+            if (snapshotImageList == null || snapshotListView == null || preview == null) return;
+            string key = snapshotId.ToString();
+            // Noi dung snapshot bat bien -> chi them thumbnail mot lan (tranh xao tron index ImageList).
+            if (!snapshotImageList.Images.ContainsKey(key))
+            {
+                using (Bitmap thumb = FitOntoCanvas(preview, snapshotImageList.ImageSize))
+                    snapshotImageList.Images.Add(key, thumb); // ImageList sao chep -> co the dispose thumb
+            }
+            foreach (ListViewItem it in snapshotListView.Items)
+            {
+                if (it.Tag is SnapshotInfo s && s.SnapshotID == snapshotId)
+                {
+                    it.ImageKey = key;
+                    break;
+                }
+            }
+        }
+
+        private SnapshotInfo GetSelectedSnapshot()
+        {
+            if (snapshotListView == null || snapshotListView.SelectedItems.Count == 0) return null;
+            return snapshotListView.SelectedItems[0].Tag as SnapshotInfo;
+        }
+
+        private void ShowSelectedSnapshotPreview()
+        {
+            var snap = GetSelectedSnapshot();
+            if (snap == null) return;
+            DateTime local = DateTimeOffset.FromUnixTimeMilliseconds(snap.Timestamp).LocalDateTime;
+            if (snapshotPreviewCache.TryGetValue(snap.SnapshotID, out var bmp) && bmp != null)
+            {
+                snapshotPreview.Image = bmp;
+                snapshotPreviewLabel.Text = $"Snapshot #{snap.SnapshotID} — {local:HH:mm:ss dd/MM/yyyy}";
+            }
+            else
+            {
+                snapshotPreview.Image = null;
+                snapshotPreviewLabel.Text = $"Snapshot #{snap.SnapshotID} — đang tải xem trước...";
+                if (!snapshotFetchQueue.Contains(snap.SnapshotID))
+                    snapshotFetchQueue.Enqueue(snap.SnapshotID);
+                PumpSnapshotFetch();
+            }
+        }
+
+        // Thu nho giu ti le, tra ve bitmap moi.
+        private static Bitmap ScaleToFit(Bitmap src, int maxW, int maxH)
+        {
+            float scale = Math.Min(1f, Math.Min(maxW / (float)src.Width, maxH / (float)src.Height));
+            int w = Math.Max(1, (int)(src.Width * scale));
+            int h = Math.Max(1, (int)(src.Height * scale));
+            var dst = new Bitmap(w, h);
+            using (var g = Graphics.FromImage(dst))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(src, new Rectangle(0, 0, w, h));
+            }
+            return dst;
+        }
+
+        // Ve src (giu ti le) vao giua mot khung trang dung kich thuoc box (cho icon ListView dong deu).
+        private static Bitmap FitOntoCanvas(Bitmap src, Size box)
+        {
+            var dst = new Bitmap(box.Width, box.Height);
+            using (var g = Graphics.FromImage(dst))
+            {
+                g.Clear(Color.White);
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                float scale = Math.Min(box.Width / (float)src.Width, box.Height / (float)src.Height);
+                int w = Math.Max(1, (int)(src.Width * scale));
+                int h = Math.Max(1, (int)(src.Height * scale));
+                g.DrawImage(src, new Rectangle((box.Width - w) / 2, (box.Height - h) / 2, w, h));
+            }
+            return dst;
+        }
+
+        private void ViewSelectedSnapshot()
+        {
+            var snap = GetSelectedSnapshot();
+            if (snap == null) return;
+            isViewingSnapshot = true;
+            _network?.RequestSnapshotRestore(snap.SnapshotID);
+            AppendLog($"Đang xem lại snapshot #{snap.SnapshotID} (chỉ xem) trên canvas chính. Bấm 'Về hiện tại' để quay lại.");
+        }
+
+        private void ReturnToLiveBoard()
+        {
+            isViewingSnapshot = false;
+            _network?.Send(CommandType.REQUEST_PLAYBACK, new PlaybackRequestPayload { RoomCode = _roomCode });
+            AppendLog("Đã quay lại trạng thái hiện tại của phòng.");
         }
 
         private void NetworkEvents_OnStickerReceived(StickerPayload payload)
         {
-            if (payload == null)
+            if (payload == null || isViewingSnapshot)
                 return;
             UIInvoke(() =>
             {
@@ -2372,7 +2795,7 @@ namespace DrawingClient.Forms
 
         private void NetworkEvents_OnStickyNoteReceived(StickyNotePayload payload)
         {
-            if (payload == null || string.IsNullOrWhiteSpace(payload.NoteID))
+            if (payload == null || string.IsNullOrWhiteSpace(payload.NoteID) || isViewingSnapshot)
                 return;
 
             UIInvoke(() =>
@@ -2491,23 +2914,12 @@ namespace DrawingClient.Forms
                 return;
             }
 
-            if (e.KeyCode == Keys.D1)
+            // Phim tat tha emoji (chi khi khong dang go chat/RichTextBox). Gui qua TCP cho tin cay.
+            if (!(ActiveControl is TextBoxBase))
             {
-                var pos = canvas.PointToClient(Cursor.Position);
-                cursorLayer.AddEmoji("👍", pos);
-                _udpManager?.SendReaction(new ReactionPayload { Username = _network.CurrentUsername, Emoji = "👍", X = pos.X, Y = pos.Y });
-            }
-            if (e.KeyCode == Keys.D2)
-            {
-                var pos = canvas.PointToClient(Cursor.Position);
-                cursorLayer.AddEmoji("❤️", pos);
-                _udpManager?.SendReaction(new ReactionPayload { Username = _network.CurrentUsername, Emoji = "❤️", X = pos.X, Y = pos.Y });
-            }
-            if (e.KeyCode == Keys.D3)
-            {
-                var pos = canvas.PointToClient(Cursor.Position);
-                cursorLayer.AddEmoji("😂", pos);
-                _udpManager?.SendReaction(new ReactionPayload { Username = _network.CurrentUsername, Emoji = "😂", X = pos.X, Y = pos.Y });
+                if (e.KeyCode == Keys.D1) EmitReaction("👍", canvas.PointToClient(Cursor.Position));
+                else if (e.KeyCode == Keys.D2) EmitReaction("❤️", canvas.PointToClient(Cursor.Position));
+                else if (e.KeyCode == Keys.D3) EmitReaction("😂", canvas.PointToClient(Cursor.Position));
             }
         }
 
@@ -2769,15 +3181,19 @@ namespace DrawingClient.Forms
         private class PlaybackPanelControl : Panel
         {
             public event Action RequestPlayback;
+            public event Action RequestSnapshots;
 
             public PlaybackPanelControl()
             {
                 Height = 44;
                 BackColor = Color.Honeydew;
                 BorderStyle = BorderStyle.FixedSingle;
-                var btn = new Button { Text = "Yêu cầu phát lại", Width = 140, Height = 28, Location = new Point(8, 8) };
+                var btn = new Button { Text = "Phát lại", Width = 92, Height = 28, Location = new Point(8, 8) };
                 btn.Click += (s, e) => RequestPlayback?.Invoke();
+                var btnSnap = new Button { Text = "Xem lại (Snapshot)", Width = 150, Height = 28, Location = new Point(106, 8) };
+                btnSnap.Click += (s, e) => RequestSnapshots?.Invoke();
                 Controls.Add(btn);
+                Controls.Add(btnSnap);
             }
         }
     } 

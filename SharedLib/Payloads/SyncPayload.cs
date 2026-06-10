@@ -57,23 +57,32 @@ namespace SharedLib.Payloads
         public string RoomCode { get; set; }
     }
 
-    public class PlaybackResponsePayload
+    // Snapshot: checkpoint dinh ky cua board (JSON), dung cho fast-join va xem lai trang thai cu (view-only).
+    public class SnapshotInfo
     {
-        public string RoomCode { get; set; }
-        public List<DrawAction> Actions { get; set; } = new List<DrawAction>();
+        public int SnapshotID { get; set; }
+        public long Timestamp { get; set; }       // Unix ms cua taken_at
+        public string ThumbnailBase64 { get; set; }
     }
 
-    // Tuần 6 — Time Travel Timeline
-    public class TimelineRequestPayload
+    public class SnapshotListPayload
     {
         public string RoomCode { get; set; }
-        public long TargetTimestamp { get; set; }  // Unix ms — muốn xem canvas tại thời điểm này
+        public List<SnapshotInfo> Snapshots { get; set; } = new List<SnapshotInfo>();
     }
 
-    public class TimelineResponsePayload
+    public class SnapshotRestorePayload
     {
         public string RoomCode { get; set; }
-        public long TargetTimestamp { get; set; }
-        public List<DrawAction> Actions { get; set; } = new List<DrawAction>();
+        public int SnapshotID { get; set; }
+    }
+
+    // SNAPSHOT_DATA: request gui {RoomCode, SnapshotID}; response server tra ve them BoardJson
+    // (mang JSON cac DrawAction) de client render thumbnail/preview offscreen, khong dung canvas chinh.
+    public class SnapshotDataPayload
+    {
+        public string RoomCode { get; set; }
+        public int SnapshotID { get; set; }
+        public string BoardJson { get; set; }
     }
 }

@@ -61,6 +61,23 @@ function Copy-AppOutput {
     Copy-Item -Recurse -Force (Join-Path $exe.DirectoryName '*') $Destination
 }
 
+function Assert-RequiredFiles {
+    param(
+        [string]$Destination,
+        [string[]]$RequiredFiles
+    )
+
+    $missing = @()
+    foreach ($f in $RequiredFiles) {
+        if (-not (Test-Path (Join-Path $Destination $f))) {
+            $missing += $f
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw "Goi thieu file bat buoc trong '$Destination': $($missing -join ', '). Build $Configuration co the chua copy DLL (CopyLocal) - kiem tra reference/HintPath va restore packages."
+    }
+}
+
 $clientOut = Join-Path $repoRoot "DrawingClient\bin\$Configuration"
 $serverOut = Join-Path $repoRoot "DrawingServer\bin\$Configuration"
 $lbOut = Join-Path $repoRoot "LoadBalancer\bin\$Configuration"
@@ -68,6 +85,19 @@ $lbOut = Join-Path $repoRoot "LoadBalancer\bin\$Configuration"
 Copy-AppOutput -ExeName 'DrawingClient.exe' -BuildRoot $clientOut -Destination (Join-Path $appsRoot 'DrawingClient')
 Copy-AppOutput -ExeName 'DrawingServer.exe' -BuildRoot $serverOut -Destination (Join-Path $appsRoot 'DrawingServer')
 Copy-AppOutput -ExeName 'LoadBalancer.exe' -BuildRoot $lbOut -Destination (Join-Path $appsRoot 'LoadBalancer')
+
+# Bao dam client co du DLL chay AI line art (WebP->PNG): ImageSharp + cac transitive System.* (CopyLocal).
+Assert-RequiredFiles -Destination (Join-Path $appsRoot 'DrawingClient') -RequiredFiles @(
+    'DrawingClient.exe',
+    'SharedLib.dll',
+    'Newtonsoft.Json.dll',
+    'SixLabors.ImageSharp.dll',
+    'System.Buffers.dll',
+    'System.Memory.dll',
+    'System.Numerics.Vectors.dll',
+    'System.Runtime.CompilerServices.Unsafe.dll',
+    'System.Text.Encoding.CodePages.dll'
+)
 
 $lbServers = Join-Path $repoRoot 'LoadBalancer\servers.json'
 if (Test-Path $lbServers) {

@@ -255,6 +255,7 @@ namespace DrawingClient.Forms
             if (response != null && response.IsSuccess)
             {
                 // AUTH FLOW - BUOC 8: dang nhap thanh cong, bo subscribe auth event va chuyen sang LobbyForm.
+                lblStatus.ForeColor = Color.ForestGreen;
                 lblStatus.Text = "Đăng nhập thành công.";
                 NetworkEvents.OnLoginResponse -= NetworkEvents_OnLoginResponse;
                 NetworkEvents.OnRegisterResponse -= NetworkEvents_OnRegisterResponse;
@@ -266,6 +267,8 @@ namespace DrawingClient.Forms
             }
             else
             {
+                // AUTH FLOW - LOGIN UI: hien thi dung message server tra ve, vi du "Sai mat khau!" hoac "Tai khoan chua ton tai.".
+                lblStatus.ForeColor = Color.Firebrick;
                 lblStatus.Text = response?.Message ?? "Đăng nhập thất bại.";
             }
         }
@@ -280,6 +283,8 @@ namespace DrawingClient.Forms
             }
 
             // AUTH FLOW - BUOC 8A: dang ky chi hien ket qua; user dang nhap lai bang nut Dang nhap.
+            // Message nay di thang tu DbManager.RegisterAsync, nen co the bao trung ten hoac dang ky thanh cong.
+            lblStatus.ForeColor = response != null && response.IsSuccess ? Color.ForestGreen : Color.Firebrick;
             lblStatus.Text = response?.Message ?? "Đăng ký xong.";
         }
 

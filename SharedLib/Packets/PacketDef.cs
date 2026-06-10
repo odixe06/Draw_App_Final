@@ -1,17 +1,15 @@
 // ============================================================
 // SharedLib/Packets/PacketDef.cs
-// PacketDef v6 FINAL � Person B (Network)
-// Bao g?m t?t c? CommandType t? Tu?n 1 ? Tu?n 6
+// Dinh nghia toan bo CommandType cho giao thuc NT106 Drawing App.
 // ============================================================
 using System;
-using System.Text;
 
 namespace SharedLib.Packets
 {
     /// <summary>
-    /// To�n b? command types cho giao th?c NT106 Drawing App.
-    /// TCP: Auth, Room, Sync, Undo, Chat, Gallery, Security, AI
-    /// UDP: Draw, Cursor, Reaction, Spotlight, PixelArt
+    /// Toan bo command types cho giao thuc NT106 Drawing App.
+    /// TCP: Auth, Room, Sync, Undo, Chat, Gallery, Security, AI, Snapshot
+    /// UDP: Draw, Cursor, Reaction, PixelArt
     /// </summary>
     public enum CommandType : byte
     {
@@ -33,14 +31,14 @@ namespace SharedLib.Packets
         USER_JOIN = 0x21,
         USER_LEAVE = 0x22,
 
-        // -- DRAWING (UDP) ---------------------------------------
+        // -- DRAWING (TCP/UDP) -----------------------------------
         DRAW = 0x30,
         FLOOD_FILL = 0x31,
         TEXT = 0x32,
         SPRAY = 0x33,
         IMPORT_IMAGE = 0x34,
         SET_BACKGROUND = 0x35,
-        CLEAR_ALL = 0x36,     // Tu?n 1 � broadcast x�a canvas
+        CLEAR_ALL = 0x36,     // broadcast xoa canvas
 
         // -- SYNC (TCP) ------------------------------------------
         SYNC_BOARD = 0x40,
@@ -52,35 +50,33 @@ namespace SharedLib.Packets
 
         // -- INTERACTION (TCP/UDP) -------------------------------
         CHAT = 0x60,     // TCP
-        REACTION = 0x61,     // UDP
+        REACTION = 0x61,     // UDP/TCP emoji reaction
         CURSOR = 0x62,     // UDP/TCP real-time
-        LASER = 0x63,     // legacy disabled
+        LASER = 0x63,     // legacy disabled (server bo qua)
         ACTIVITY_LOG = 0x64,     // TCP
         UDP_PING = 0x65,     // UDP endpoint registration
+
         // -- FEATURES (TCP) --------------------------------------
         SET_TURNBASED = 0x80,
         TURN_CHANGE = 0x81,
         REQUEST_PLAYBACK = 0x82,
-        PLAYBACK_RESPONSE = 0x83,
 
         // -- GALLERY (TCP) ---------------------------------------
         SAVE_TO_GALLERY = 0x90,
         GET_GALLERY = 0x91,
         GALLERY_RESPONSE = 0x92,
-        PUBLIC_GALLERY_LINK = 0x93,     // Tu?n 7 � public link
+        PUBLIC_GALLERY_LINK = 0x93,
 
-        // -- AI FEATURES (TCP) -- Tu?n 5-6 ----------------------
-        AI_TEXT_TO_IMAGE = 0xA0,     // Tu?n 5
-        AI_BG_REMOVED = 0xA1,     // Tu?n 5
+        // -- AI FEATURES (TCP) -----------------------------------
+        AI_TEXT_TO_IMAGE = 0xA0,
+        AI_BG_REMOVED = 0xA1,
 
-        // -- ADVANCED FEATURES (TCP/UDP) -- Tu?n 5-8 ------------
-        STICKER = 0xB0,     // Tu?n 5 � Sticker & Shape Library
-        FOLLOW_MODE = 0xB1,     // Tu?n 5 � Follow another user
-        SPOTLIGHT = 0xB2,     // Tu?n 5 � UDP
-        STICKY_NOTE = 0xB3,     // Tu?n 5 � Sticky note/comment
-        STICKY_NOTE_REPLY = 0xB4,     // Tu?n 5
-        TIMELINE_REQUEST = 0xB7,     // Tu?n 6 � Time travel
-        TIMELINE_RESPONSE = 0xB8,     // Tu?n 6
+        // -- ADVANCED FEATURES (TCP/UDP) -------------------------
+        STICKER = 0xB0,     // Sticker & Shape Library
+        STICKY_NOTE = 0xB3,     // Sticky note/comment
+        SNAPSHOT_LIST = 0xB9,     // Snapshot: liet ke checkpoint cua phong
+        SNAPSHOT_RESTORE = 0xBA,     // Snapshot: xem lai mot checkpoint (view-only)
+        SNAPSHOT_DATA = 0xBB,     // Snapshot: lay board JSON cua mot checkpoint de render thumbnail/preview (khong dung canvas chinh)
 
         // -- PIXEL ART (TCP/UDP) --------------------------------
         PIXEL_ART_DRAW = 0xC3,     // UDP
@@ -92,7 +88,7 @@ namespace SharedLib.Packets
     }
 
     /// <summary>
-    /// C?u tr�c packet: [Header=0xFF(1B)] [Cmd(1B)] [Length(4B, big-endian)] [Payload(N bytes, UTF-8 JSON)]
+    /// Cau truc packet: [Header=0xFF(1B)] [Cmd(1B)] [Length(4B, big-endian)] [Payload(N bytes, UTF-8 JSON)]
     /// </summary>
     public class Packet
     {
@@ -102,7 +98,7 @@ namespace SharedLib.Packets
         public CommandType Cmd { get; set; }
         public byte[] Payload { get; set; } = Array.Empty<byte>();
 
-        /// <summary>Chuy?n Packet th�nh byte[] d? g?i qua socket.</summary>
+        /// <summary>Chuyen Packet thanh byte[] de gui qua socket.</summary>
         public byte[] Serialize()
         {
             int payloadLen = Payload?.Length ?? 0;
@@ -120,17 +116,17 @@ namespace SharedLib.Packets
             return result;
         }
 
-        /// <summary>Ph�n t�ch byte[] nh?n t? socket th�nh Packet.</summary>
+        /// <summary>Phan tich byte[] nhan tu socket thanh Packet.</summary>
         public static Packet Deserialize(byte[] data)
         {
             if (data == null || data.Length < 6)
-                throw new ArgumentException("D? li?u packet qu� ng?n.");
+                throw new ArgumentException("Du lieu packet qua ngan.");
             if (data[0] != HEADER_BYTE)
-                throw new ArgumentException($"Header kh�ng h?p l?: 0x{data[0]:X2}");
+                throw new ArgumentException($"Header khong hop le: 0x{data[0]:X2}");
 
             int payloadLen = (data[2] << 24) | (data[3] << 16) | (data[4] << 8) | data[5];
             if (data.Length < 6 + payloadLen)
-                throw new ArgumentException("Payload b? c?t ng?n.");
+                throw new ArgumentException("Payload bi cat ngan.");
 
             byte[] payload = new byte[payloadLen];
             if (payloadLen > 0)

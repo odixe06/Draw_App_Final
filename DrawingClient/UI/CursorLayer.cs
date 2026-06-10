@@ -21,9 +21,13 @@ namespace DrawingClient.UI
             _timer.Start();
         }
 
+        private const int EmojiMaxLife = 2000;
+
         public void UpdateCursor(CursorPayload payload) { }
         public void RemoveCursor(string username) { }
-        public void AddEmoji(string emoji, Point pos) { _emojis.Add(new EmojiDrop { Text = emoji, Position = pos, Life = 2000 }); }
+        // pos la toa do CANVAS (world). Canvas_Paint cua CanvasManager set transform zoom/pan,
+        // nen ve o toa do canvas se hien dung vi tri tren moi client du zoom khac nhau.
+        public void AddEmoji(string emoji, Point pos) { _emojis.Add(new EmojiDrop { Text = emoji, Position = pos, Life = EmojiMaxLife }); }
 
         private void Timer_Tick(object sender, EventArgs e)
         {
@@ -40,8 +44,14 @@ namespace DrawingClient.UI
 
         private void Canvas_Paint(object sender, PaintEventArgs e)
         {
+            if (_emojis.Count == 0) return;
             using (Font f = new Font("Segoe UI Emoji", 20))
-                foreach (var em in _emojis) e.Graphics.DrawString(em.Text, f, Brushes.Black, em.Position);
+                foreach (var em in _emojis)
+                {
+                    int alpha = Math.Max(0, Math.Min(255, (int)(255.0 * em.Life / EmojiMaxLife)));
+                    using (Brush b = new SolidBrush(Color.FromArgb(alpha, Color.Black)))
+                        e.Graphics.DrawString(em.Text, f, b, em.Position);
+                }
         }
 
         private class EmojiDrop { public string Text { get; set; } public Point Position { get; set; } public int Life { get; set; } }

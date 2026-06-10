@@ -27,6 +27,7 @@ namespace DrawingServer
 
             CrossServerSyncService.Start();
             ServerNodeHeartbeatService.Start(tcpPort, udpPort);
+            SnapshotService.Start();
             _ = Task.Run(() => udpServer.StartAsync(udpPort));
             await tcpServer.StartAsync(pfxPath, pfxPassword, tcpPort);
         }

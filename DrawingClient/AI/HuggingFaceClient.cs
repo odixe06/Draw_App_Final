@@ -10,7 +10,7 @@ using SharedLib.Logging;
 
 namespace DrawingClient.AI
 {
-    public static class StabilityAiClient
+    public static class HuggingFaceClient
     {
         // XU LY DA LUONG: gioi han toi da 2 request AI dong thoi de tranh qua tai API/UI.
         private static readonly SemaphoreSlim RequestGate = new SemaphoreSlim(2, 2);

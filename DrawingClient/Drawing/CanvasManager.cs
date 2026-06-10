@@ -87,6 +87,21 @@ namespace DrawingClient.Drawing
         private float minimumZoomFactor = 0.2f;
         private string activeDrawingActionId;
 
+        // Theo doi vung net ve tay gan day cua nguoi dung local (toa do canvas), phuc vu nhan dien hinh ve.
+        private Rectangle recentSketchBounds = Rectangle.Empty;
+        private bool hasRecentSketch;
+
+        // Cong cu SmartPen (But thong minh): bat diem net ve tay trong khi keo,
+        // nha chuot -> lam dep (lam muot/nan hinh) thanh net Pen that (tay duoc).
+        private readonly List<Point> smartStrokePoints = new List<Point>();
+
+        // Cong cu AiRegion: keo-tha chon mot vung chu nhat (toa do canvas) de gui AI ve lai thanh line art (object anh).
+        private bool isSelectingAiRegion;
+        private Point aiRegionStart;
+        private Point aiRegionCurrent;
+        /// <summary>Bao MainForm da chon xong mot vung (toa do canvas) bang cong cu AiRegion.</summary>
+        public Action<Rectangle> OnAiRegionSelected;
+
         public ToolType CurrentTool { get; set; } = ToolType.Pen;
         public Color CurrentColor { get; set; } = Color.Black;
         public Color BackgroundColor { get; set; } = Color.White;
@@ -106,6 +121,47 @@ namespace DrawingClient.Drawing
         public Action<ImportImagePayload> OnNetworkImportImageAction;
         public Action<StickerPayload> OnNetworkStickerAction;
         public bool HasSelectedObject => activeObjectKind != InteractiveObjectKind.None && !string.IsNullOrWhiteSpace(activeObjectId);
+
+        // ── Nhan dien hinh ve tay: theo doi vung va trich bitmap vung do ───────────
+        public bool HasRecentSketch => hasRecentSketch;
+        public Rectangle RecentSketchBounds => recentSketchBounds;
+
+        public void ResetRecentSketch()
+        {
+            hasRecentSketch = false;
+            recentSketchBounds = Rectangle.Empty;
+        }
+
+        public bool IsPointInRecentSketch(Point canvasPoint)
+        {
+            if (!hasRecentSketch) return false;
+            return Rectangle.Inflate(recentSketchBounds, 24, 24).Contains(canvasPoint);
+        }
+
+        private void ExpandRecentSketch(Point a, Point b)
+        {
+            int minX = Math.Min(a.X, b.X), minY = Math.Min(a.Y, b.Y);
+            int maxX = Math.Max(a.X, b.X), maxY = Math.Max(a.Y, b.Y);
+            Rectangle seg = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+            recentSketchBounds = hasRecentSketch ? Rectangle.Union(recentSketchBounds, seg) : seg;
+            hasRecentSketch = true;
+        }
+
+        private static Rectangle NormalizeRect(Point a, Point b)
+        {
+            int x = Math.Min(a.X, b.X), y = Math.Min(a.Y, b.Y);
+            return new Rectangle(x, y, Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
+        }
+
+        /// <summary>Render mot vung cua canvas (da gop nen + net ve + object) ra bitmap doc lap.</summary>
+        public Bitmap RenderRegionToBitmap(Rectangle canvasRect)
+        {
+            if (drawingSurface == null) return null;
+            Rectangle clamp = Rectangle.Intersect(canvasRect, new Rectangle(0, 0, drawingSurface.Width, drawingSurface.Height));
+            if (clamp.Width <= 1 || clamp.Height <= 1) return null;
+            using (Bitmap full = RenderToBitmap())
+                return full.Clone(clamp, full.PixelFormat);
+        }
 
         public CanvasManager(PictureBox pictureBox)
         {
@@ -462,6 +518,7 @@ namespace DrawingClient.Drawing
                 ClearImageObjects();
                 BackgroundColor = Color.White;
                 ClearBackgroundImage();
+                ResetRecentSketch();
                 canvas.Invalidate();
             }
             catch { }
@@ -624,6 +681,7 @@ namespace DrawingClient.Drawing
                 ClearImageObjects();
                 BackgroundColor = Color.White;
                 ClearBackgroundImage();
+                ResetRecentSketch();
                 canvas.Invalidate();
             }
             catch { }
@@ -820,6 +878,29 @@ namespace DrawingClient.Drawing
                     }
                 }
 
+                if (isDrawing && CurrentTool == ToolType.SmartPen && smartStrokePoints.Count > 1)
+                {
+                    // Preview net tho (mo nhe) trong khi keo; nha chuot se thay bang net da lam dep.
+                    using (Pen previewPen = new Pen(Color.FromArgb(150, CurrentColor), PenWidth))
+                    {
+                        previewPen.StartCap = LineCap.Round;
+                        previewPen.EndCap = LineCap.Round;
+                        previewPen.LineJoin = LineJoin.Round;
+                        e.Graphics.DrawLines(previewPen, smartStrokePoints.ToArray());
+                    }
+                }
+
+                if (isSelectingAiRegion && CurrentTool == ToolType.AiRegion)
+                {
+                    Rectangle sel = NormalizeRect(aiRegionStart, aiRegionCurrent);
+                    using (Brush fill = new SolidBrush(Color.FromArgb(40, Color.DodgerBlue)))
+                    using (Pen marquee = new Pen(Color.FromArgb(220, Color.DodgerBlue), 1.5f / Math.Max(0.01f, ZoomFactor)) { DashStyle = DashStyle.Dash })
+                    {
+                        e.Graphics.FillRectangle(fill, sel);
+                        e.Graphics.DrawRectangle(marquee, sel);
+                    }
+                }
+
                 lock (cursorLock)
                 {
                     foreach (var cursor in remoteCursors)
@@ -939,6 +1020,15 @@ namespace DrawingClient.Drawing
             {
                 Point actualPoint = ScreenToCanvas(e.Location);
 
+                if (CurrentTool == ToolType.AiRegion)
+                {
+                    isSelectingAiRegion = true;
+                    aiRegionStart = actualPoint;
+                    aiRegionCurrent = actualPoint;
+                    canvas.Invalidate();
+                    return;
+                }
+
                 if (CurrentTool == ToolType.Pipette)
                 {
                     if (actualPoint.X >= 0 && actualPoint.X < drawingSurface.Width && actualPoint.Y >= 0 && actualPoint.Y < drawingSurface.Height)
@@ -977,6 +1067,12 @@ namespace DrawingClient.Drawing
                 currentPoint = actualPoint;
                 activeDrawingActionId = Guid.NewGuid().ToString();
                 try { UndoHistory?.Push(drawingSurface); } catch { }
+
+                if (CurrentTool == ToolType.SmartPen)
+                {
+                    smartStrokePoints.Clear();
+                    smartStrokePoints.Add(actualPoint);
+                }
             }
 
         }
@@ -1009,6 +1105,23 @@ namespace DrawingClient.Drawing
             Point actualPoint = ScreenToCanvas(e.Location);
             currentPoint = actualPoint;
 
+            if (isSelectingAiRegion && CurrentTool == ToolType.AiRegion)
+            {
+                aiRegionCurrent = actualPoint;
+                canvas.Invalidate();
+                return;
+            }
+
+            if (isDrawing && CurrentTool == ToolType.SmartPen)
+            {
+                // Chi bat diem + ve preview (Canvas_Paint); KHONG ve thang/broadcast net tho.
+                if (smartStrokePoints.Count == 0 || Distance(smartStrokePoints[smartStrokePoints.Count - 1], actualPoint) >= 1.2f)
+                    smartStrokePoints.Add(actualPoint);
+                previousPoint = actualPoint;
+                canvas.Invalidate();
+                return;
+            }
+
             if (isDrawing && (CurrentTool == ToolType.Pen || CurrentTool == ToolType.Eraser))
             {
                 Color penColor = CurrentTool == ToolType.Eraser ? BackgroundColor : CurrentColor;
@@ -1024,6 +1137,8 @@ namespace DrawingClient.Drawing
                 }
 
                 SendNetworkDrawAction(previousPoint, actualPoint, penColor, PenWidth, CurrentTool);
+                if (CurrentTool == ToolType.Pen)
+                    ExpandRecentSketch(previousPoint, actualPoint);
                 previousPoint = actualPoint;
                 canvas.Invalidate();
             }
@@ -1074,6 +1189,30 @@ namespace DrawingClient.Drawing
                 return;
             }
 
+            if (CurrentTool == ToolType.AiRegion)
+            {
+                if (isSelectingAiRegion)
+                {
+                    isSelectingAiRegion = false;
+                    Rectangle sel = NormalizeRect(aiRegionStart, aiRegionCurrent);
+                    canvas.Invalidate();
+                    if (sel.Width >= 8 && sel.Height >= 8)
+                        OnAiRegionSelected?.Invoke(sel);
+                }
+                return;
+            }
+
+            if (isDrawing && CurrentTool == ToolType.SmartPen)
+            {
+                isDrawing = false;
+                var raw = new List<Point>(smartStrokePoints);
+                smartStrokePoints.Clear();
+                CommitSmartStroke(raw);
+                activeDrawingActionId = null;
+                canvas.Invalidate();
+                return;
+            }
+
             if (isDrawing && (CurrentTool == ToolType.Line || CurrentTool == ToolType.Rectangle || CurrentTool == ToolType.Circle))
             {
                 Point finalPoint = GetShapeEndPoint(previousPoint, currentPoint, CurrentTool);
@@ -1082,6 +1221,7 @@ namespace DrawingClient.Drawing
                     DrawShape(graphics, pen, previousPoint, finalPoint, CurrentTool);
                 }
                 SendNetworkDrawAction(previousPoint, finalPoint, CurrentColor, PenWidth, CurrentTool);
+                ExpandRecentSketch(previousPoint, finalPoint);
                 canvas.Invalidate();
             }
 
@@ -1792,6 +1932,45 @@ namespace DrawingClient.Drawing
                 return ConstrainToSquare(origin, point);
 
             return point;
+        }
+
+        private static float Distance(Point a, Point b)
+        {
+            float dx = a.X - b.X, dy = a.Y - b.Y;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        // SmartPen: net tho da bat -> lam dep -> ve len drawingSurface + broadcast nhu cac doan Pen that.
+        // Net ket qua nam tren lop pixel (giong but thuong) nen co the TAY duoc tung phan.
+        private void CommitSmartStroke(List<Point> raw)
+        {
+            if (raw == null || raw.Count == 0) return;
+
+            BeautifyResult result = StrokeBeautifier.Beautify(raw);
+            List<PointF> pts = result?.Points;
+            if (pts == null || pts.Count < 2)
+            {
+                // Du phong: ve lai net tho neu khong lam dep duoc.
+                pts = new List<PointF>();
+                foreach (var p in raw) pts.Add(new PointF(p.X, p.Y));
+            }
+            if (pts.Count < 2) return;
+
+            using (Pen pen = new Pen(CurrentColor, PenWidth))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                pen.LineJoin = LineJoin.Round;
+
+                for (int i = 1; i < pts.Count; i++)
+                {
+                    Point p1 = Point.Round(pts[i - 1]);
+                    Point p2 = Point.Round(pts[i]);
+                    if (p1 == p2) p2.X += 1; // cham: ve doan 1px de round-cap thanh dot
+                    graphics.DrawLine(pen, p1, p2);
+                    SendNetworkDrawAction(p1, p2, CurrentColor, PenWidth, ToolType.Pen);
+                }
+            }
         }
 
         private void SendNetworkDrawAction(Point p1, Point p2, Color color, int width, ToolType tool)

@@ -351,8 +351,11 @@ namespace DrawingClient.Network
         public void SendTextRealtime(DrawPayload payload) => Send(CommandType.TEXT, payload);
         public void SendSticker(StickerPayload payload) => Send(CommandType.STICKER, payload);
         public void SendStickyNote(StickyNotePayload payload) => Send(CommandType.STICKY_NOTE, payload);
-        public void SendFollowMode(string targetUsername, bool isFollowing) => Send(CommandType.FOLLOW_MODE, new FollowModePayload { FollowerUsername = CurrentUsername, TargetUsername = targetUsername, IsFollowing = isFollowing });
+        public void SendReaction(ReactionPayload payload) => Send(CommandType.REACTION, payload);
         public void SendTurnChange(TurnBasedPayload payload) => Send(CommandType.TURN_CHANGE, payload);
+        public void RequestSnapshotList() => Send(CommandType.SNAPSHOT_LIST, new SnapshotListPayload { RoomCode = CurrentRoomCode });
+        public void RequestSnapshotRestore(int snapshotId) => Send(CommandType.SNAPSHOT_RESTORE, new SnapshotRestorePayload { RoomCode = CurrentRoomCode, SnapshotID = snapshotId });
+        public void RequestSnapshotData(int snapshotId) => Send(CommandType.SNAPSHOT_DATA, new SnapshotDataPayload { RoomCode = CurrentRoomCode, SnapshotID = snapshotId });
         public void SendGetGallery() => Send(CommandType.GET_GALLERY, new GetGalleryPayload { RoomCode = CurrentRoomCode });
         public void SendSaveGallery(string filename, string imageData, string thumbnailData) => Send(CommandType.SAVE_TO_GALLERY, new SaveGalleryPayload { RoomCode = CurrentRoomCode, Username = CurrentUsername, Filename = filename, ImageData = imageData, ThumbnailData = thumbnailData });
 
@@ -469,15 +472,25 @@ namespace DrawingClient.Network
                     case CommandType.CURSOR:
                         NetworkEvents.RaiseCursorReceived(PacketHelper.GetPayload<CursorPayload>(p));
                         break;
+                    case CommandType.REACTION:
+                        NetworkEvents.RaiseReactionReceived(PacketHelper.GetPayload<ReactionPayload>(p));
+                        break;
                     case CommandType.STICKER:
                         NetworkEvents.RaiseStickerReceived(PacketHelper.GetPayload<StickerPayload>(p));
                         break;
                     case CommandType.STICKY_NOTE:
                         NetworkEvents.RaiseStickyNoteReceived(PacketHelper.GetPayload<StickyNotePayload>(p));
                         break;
-                    case CommandType.FOLLOW_MODE:
-                        NetworkEvents.RaiseFollowModeReceived(PacketHelper.GetPayload<FollowModePayload>(p));
+                    case CommandType.SNAPSHOT_LIST:
+                        NetworkEvents.RaiseSnapshotListReceived(PacketHelper.GetPayload<SnapshotListPayload>(p));
                         break;
+                    case CommandType.SNAPSHOT_DATA:
+                    {
+                        var snapData = PacketHelper.GetPayload<SnapshotDataPayload>(p);
+                        if (snapData != null)
+                            NetworkEvents.RaiseSnapshotDataReceived(snapData.SnapshotID, ParseRawActions(snapData.BoardJson ?? "[]"));
+                        break;
+                    }
                     case CommandType.SET_TURNBASED:
                     case CommandType.TURN_CHANGE:
                         NetworkEvents.RaiseTurnBasedReceived(PacketHelper.GetPayload<TurnBasedPayload>(p));

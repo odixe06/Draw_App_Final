@@ -10,6 +10,8 @@
         Eraser,
         FloodFill,
         Text,
-        Pipette
+        Pipette,
+        SmartPen,
+        AiRegion
     }
 }
